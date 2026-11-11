@@ -1,0 +1,64 @@
+package example:bakery;
+
+/// Shared types used by the other interfaces.
+interface types {
+    record ingredient {
+        name: string,
+        grams: u32,
+    }
+
+    record loaf {
+        name: string,
+        weight-grams: u32,
+    }
+}
+
+/// Storage of raw ingredients.
+interface pantry {
+    use types.{ingredient};
+
+    /// How many grams of an ingredient are in stock.
+    stock: func(name: string) -> u32;
+
+    /// Take an ingredient out of the pantry, if enough is available.
+    take: func(name: string, grams: u32) -> option<ingredient>;
+}
+
+/// Turns a list of ingredients into bread.
+interface oven {
+    use types.{ingredient, loaf};
+
+    bake: async func(ingredients: list<ingredient>, minutes: u32, celsius: u32) -> result<loaf, string>;
+}
+
+/// Knows which ingredients a bread needs.
+interface recipes {
+    use types.{ingredient};
+
+    list-recipes: func() -> list<string>;
+    ingredients-for: func(recipe: string) -> option<list<ingredient>>;
+}
+
+/// A baker uses the pantry and oven, and shares the recipes it knows.
+world baker {
+    import pantry;
+    import oven;
+
+    /// An anonymous interface declared inline in the world.
+    import scale: interface {
+        weigh: func(ingredient: string) -> u32;
+    }
+
+    /// Loose functions declared directly in the world.
+    import note: func(message: string);
+    export loaves-baked: async func() -> u32;
+
+    export recipes;
+}
+
+/// A shop looks up recipes and provides the pantry and oven.
+world shop {
+    import recipes;
+    export pantry;
+    export oven;
+}

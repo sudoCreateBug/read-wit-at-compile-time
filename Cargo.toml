@@ -1,0 +1,7 @@
+[package]
+name = "read_wit_macro"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+read_wit_macro_derive = { version = "0.1.0", path = "read_wit_macro_derive" }
