@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use syn::{LitStr, parse_macro_input};
 use wit_parser::{
     Docs, Function, FunctionKind, Handle, InterfaceId, Resolve, Span, Type, TypeDefKind, TypeId,
-    WorldId, WorldItem, WorldKey,
+    TypeOwner, WorldId, WorldItem, WorldKey,
 };
 
 /// Doc-comment annotations start with this prefix, e.g.
@@ -169,9 +169,14 @@ impl Printer<'_> {
         let name = def.name.as_deref().unwrap_or("<unnamed>");
         let ann = self.annotations(&def.docs, Some(def.span), &format!("type `{name}`"));
 
-        // A `use`d type is an alias to the type it refers to.
+        // Both `type a = b;` and `use`d types are aliases; show the type they
+        // point to directly as well as the definition at the end of the chain.
         let kind = match &def.kind {
-            TypeDefKind::Type(t) => format!("alias of {}", type_name(resolve, t)),
+            TypeDefKind::Type(t) => format!(
+                "alias of {}, true type: {}",
+                qualified_name(resolve, t),
+                true_type(resolve, t)
+            ),
             kind => kind.as_str().to_string(),
         };
         eprintln!("{indent}type {name} ({kind}){ann}");
@@ -330,6 +335,44 @@ fn parse_annotations(text: &str) -> Result<Vec<String>, String> {
         found.push(annotation);
     }
     Ok(found)
+}
+
+/// Follows a chain of aliases (`type a = b;`, `use x.{b}`) to the type that
+/// is actually defined, rendered as e.g. `record types.ingredient` or `u32`.
+fn true_type(resolve: &Resolve, ty: &Type) -> String {
+    let mut ty = *ty;
+    while let Type::Id(id) = ty
+        && let TypeDefKind::Type(inner) = resolve.types[id].kind
+    {
+        ty = inner;
+    }
+    match ty {
+        Type::Id(id) if resolve.types[id].name.is_some() => {
+            let kind = resolve.types[id].kind.as_str();
+            format!("{kind} {}", qualified_name(resolve, &ty))
+        }
+        _ => type_name(resolve, &ty),
+    }
+}
+
+/// Like [`type_name`], but prefixes named types with the interface or world
+/// that defines them, e.g. `types.ingredient`.
+fn qualified_name(resolve: &Resolve, ty: &Type) -> String {
+    let name = type_name(resolve, ty);
+    let Type::Id(id) = ty else { return name };
+    let def = &resolve.types[*id];
+    if def.name.is_none() {
+        return name;
+    }
+    let owner = match def.owner {
+        TypeOwner::Interface(i) => resolve.interfaces[i].name.clone(),
+        TypeOwner::World(w) => Some(resolve.worlds[w].name.clone()),
+        TypeOwner::None => None,
+    };
+    match owner {
+        Some(owner) => format!("{owner}.{name}"),
+        None => name,
+    }
 }
 
 /// Renders a type the way it would be written in WIT.

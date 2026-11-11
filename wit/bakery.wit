@@ -3,11 +3,14 @@ package example:bakery;
 
 /// Shared types used by the other interfaces.
 interface types {
+    /// A weight in grams. @dist_gen(unit = "g")
+    type grams = u32;
+
     /// @dist_gen(serializable)
     record ingredient {
         /// @dist_gen(key)
         name: string,
-        grams: u32,
+        grams: grams,
     }
 
     enum crust {
@@ -18,26 +21,30 @@ interface types {
 
     record loaf {
         name: string,
-        weight-grams: u32,
+        weight-grams: grams,
     }
 }
 
 /// Storage of raw ingredients.
 interface pantry {
-    use types.{ingredient};
+    use types.{ingredient, grams};
+
+    /// An alias of an alias: resolves through `grams` to `u32`.
+    type stock-level = grams;
 
     /// How many grams of an ingredient are in stock.
     /// @dist_gen(idempotent, timeout = 10, remote = "storage-room")
-    stock: func(name: string) -> u32;
+    stock: func(name: string) -> stock-level;
 
     /// Take an ingredient out of the pantry, if enough is available.
-    take: func(name: string, grams: u32) -> option<ingredient>;
+    take: func(name: string, amount: grams) -> option<ingredient>;
 }
 
 /// Turns a list of ingredients into bread.
 /// @dist_gen(remote = "back-kitchen")
 interface oven {
-    use types.{ingredient, loaf};
+    /// `loaf` is renamed to `bread` inside this interface.
+    use types.{ingredient, loaf as bread};
 
     /// A tin that holds dough while it rises.
     /// @dist_gen(stateful)
@@ -51,7 +58,7 @@ interface oven {
     }
 
     /// Bakes the ingredients. @dist_gen(timeout = 60) @dist_gen(retries(max = 3), label = "a (b)")
-    bake: async func(ingredients: list<ingredient>, minutes: u32, celsius: u32) -> result<loaf, string>;
+    bake: async func(ingredients: list<ingredient>, minutes: u32, celsius: u32) -> result<bread, string>;
 }
 
 /// Knows which ingredients a bread needs.
