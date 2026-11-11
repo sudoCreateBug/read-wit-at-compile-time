@@ -1,10 +1,19 @@
+/// @dist_gen(version = 1)
 package example:bakery;
 
 /// Shared types used by the other interfaces.
 interface types {
+    /// @dist_gen(serializable)
     record ingredient {
+        /// @dist_gen(key)
         name: string,
         grams: u32,
+    }
+
+    enum crust {
+        soft,
+        /// @dist_gen(default)
+        crispy,
     }
 
     record loaf {
@@ -18,6 +27,7 @@ interface pantry {
     use types.{ingredient};
 
     /// How many grams of an ingredient are in stock.
+    /// @dist_gen(idempotent, timeout = 10, remote = "storage-room")
     stock: func(name: string) -> u32;
 
     /// Take an ingredient out of the pantry, if enough is available.
@@ -25,9 +35,22 @@ interface pantry {
 }
 
 /// Turns a list of ingredients into bread.
+/// @dist_gen(remote = "back-kitchen")
 interface oven {
     use types.{ingredient, loaf};
 
+    /// A tin that holds dough while it rises.
+    /// @dist_gen(stateful)
+    resource baking-tin {
+        constructor(size: u32);
+        /// @dist_gen(idempotent)
+        fill: func(ingredients: list<ingredient>);
+        is-full: func() -> bool;
+        /// @dist_gen(cached)
+        largest: static func() -> u32;
+    }
+
+    /// Bakes the ingredients. @dist_gen(timeout = 60) @dist_gen(retries(max = 3), label = "a (b)")
     bake: async func(ingredients: list<ingredient>, minutes: u32, celsius: u32) -> result<loaf, string>;
 }
 
@@ -39,9 +62,11 @@ interface recipes {
     ingredients-for: func(recipe: string) -> option<list<ingredient>>;
 }
 
+/// @dist_gen(entry)
 /// A baker uses the pantry and oven, and shares the recipes it knows.
 world baker {
     import pantry;
+    /// @dist_gen(optional)
     import oven;
 
     /// An anonymous interface declared inline in the world.
@@ -50,6 +75,7 @@ world baker {
     }
 
     /// Loose functions declared directly in the world.
+    /// @dist_gen(local)
     import note: func(message: string);
     export loaves-baked: async func() -> u32;
 
