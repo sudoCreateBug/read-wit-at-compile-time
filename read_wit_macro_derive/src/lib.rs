@@ -6,21 +6,8 @@ use wit_parser::{
     TypeOwner, WorldId, WorldItem, WorldKey,
 };
 
-/// Doc-comment annotations start with this prefix, e.g.
-/// `/// @dist_gen(idempotent, timeout = 10)`.
 const ANNOTATION_PREFIX: &str = "@dist_gen";
 
-/// Parses a WIT file (or directory of WIT files) at compile time and prints
-/// its packages, interfaces, types, functions and worlds with their
-/// annotations.
-///
-/// The path is resolved relative to the `CARGO_MANIFEST_DIR` of the crate
-/// invoking the macro. Parse errors and malformed annotations are reported
-/// as compile errors.
-///
-/// ```ignore
-/// read_wit!("wit/world.wit");
-/// ```
 #[proc_macro]
 pub fn read_wit(input: TokenStream) -> TokenStream {
     let lit = parse_macro_input!(input as LitStr);
@@ -55,7 +42,8 @@ pub fn read_wit(input: TokenStream) -> TokenStream {
     printer.print_resolve();
 
     for error in &printer.errors {
-        // Pointing at the path literal; the message holds the WIT location.
+        //It will indicate the path literal in the macro params as error, the message holds the
+        //location in the WIT file where there was an error.
         let error = syn::Error::new(lit.span(), error).to_compile_error();
         output.extend(TokenStream::from(error));
     }
@@ -64,7 +52,6 @@ pub fn read_wit(input: TokenStream) -> TokenStream {
 
 struct Printer<'a> {
     resolve: &'a Resolve,
-    /// Malformed annotations, reported as compile errors once printing is done.
     errors: Vec<String>,
 }
 
@@ -137,7 +124,6 @@ impl Printer<'_> {
         }
     }
 
-    /// Annotations on an interface definition.
     fn interface_annotations(&mut self, id: InterfaceId) -> Vec<String> {
         let interface = &self.resolve.interfaces[id];
         let what = match &interface.name {
@@ -147,8 +133,6 @@ impl Printer<'_> {
         self.parse(&interface.docs, Some(interface.span), &what)
     }
 
-    /// Prints the types and functions of an interface. Resource methods are
-    /// printed under their resource instead of as loose functions.
     fn print_interface_body(&mut self, id: InterfaceId, indent: &str) {
         let interface = &self.resolve.interfaces[id];
         let functions: Vec<&Function> = interface.functions.values().collect();
@@ -161,8 +145,6 @@ impl Printer<'_> {
         }
     }
 
-    /// Prints a type definition along with its fields/cases/flags and, for
-    /// resources, the methods among `functions` that belong to it.
     fn print_type(&mut self, id: TypeId, indent: &str, functions: &[&Function]) {
         let resolve = self.resolve;
         let def = &resolve.types[id];
@@ -191,14 +173,14 @@ impl Printer<'_> {
         match &def.kind {
             TypeDefKind::Record(r) => {
                 for f in &r.fields {
-                    let field = format!("{}: {}", f.name, type_name(resolve, &f.ty));
+                    let field = format!("{}: {}", f.name, wit_type_name(resolve, &f.ty));
                     member("field", &field, &f.docs);
                 }
             }
             TypeDefKind::Variant(v) => {
                 for c in &v.cases {
                     let case = match &c.ty {
-                        Some(ty) => format!("{}({})", c.name, type_name(resolve, ty)),
+                        Some(ty) => format!("{}({})", c.name, wit_type_name(resolve, ty)),
                         None => c.name.clone(),
                     };
                     member("case", &case, &c.docs);
@@ -235,13 +217,13 @@ impl Printer<'_> {
         let params = func
             .params
             .iter()
-            .map(|p| format!("{}: {}", p.name, type_name(resolve, &p.ty)))
+            .map(|p| format!("{}: {}", p.name, wit_type_name(resolve, &p.ty)))
             .collect::<Vec<_>>()
             .join(", ");
         let result = func
             .result
             .as_ref()
-            .map_or("-".to_string(), |ty| type_name(resolve, ty));
+            .map_or("-".to_string(), |ty| wit_type_name(resolve, ty));
         let what = format!("function `{}`", func.name);
         let ann = self.annotations(&func.docs, Some(func.span), &what);
         eprintln!(
@@ -285,10 +267,10 @@ fn format_annotations(annotations: &[String]) -> String {
 /// Finds every `<ANNOTATION_PREFIX>(...)` in a doc comment, returning each
 /// whole annotation. Nested parentheses and quoted strings are respected.
 /// Unbalanced parentheses and unterminated strings are an error.
-fn parse_annotations(text: &str) -> Result<Vec<String>, String> {
+fn parse_annotations(doc_string: &str) -> Result<Vec<String>, String> {
     let opener = format!("{ANNOTATION_PREFIX}(");
     let mut found = Vec::new();
-    let mut rest = text;
+    let mut rest = doc_string;
 
     while let Some(start) = rest.find(&opener) {
         let body = &rest[start + opener.len()..];
@@ -326,12 +308,6 @@ fn parse_annotations(text: &str) -> Result<Vec<String>, String> {
         let annotation = format!("{opener}{})", &body[..end]);
         rest = &body[end + 1..];
 
-        // `@dist_gen(a))`: the annotation closed, but another `)` follows.
-        if rest.starts_with(')') {
-            return Err(format!(
-                "unbalanced parentheses (extra `)`) after `{annotation}`"
-            ));
-        }
         found.push(annotation);
     }
     Ok(found)
@@ -351,15 +327,19 @@ fn true_type(resolve: &Resolve, ty: &Type) -> String {
             let kind = resolve.types[id].kind.as_str();
             format!("{kind} {}", qualified_name(resolve, &ty))
         }
-        _ => type_name(resolve, &ty),
+        _ => wit_type_name(resolve, &ty),
     }
 }
 
-/// Like [`type_name`], but prefixes named types with the interface or world
-/// that defines them, e.g. `types.ingredient`.
+/// prefixes named types with the interface or world that defines them, e.g. `types.ingredient`.
 fn qualified_name(resolve: &Resolve, ty: &Type) -> String {
-    let name = type_name(resolve, ty);
-    let Type::Id(id) = ty else { return name };
+    let name = wit_type_name(resolve, ty);
+
+    let id = match ty {
+        Type::Id(id) => id,
+        _ => return name,
+    };
+
     let def = &resolve.types[*id];
     if def.name.is_none() {
         return name;
@@ -375,8 +355,8 @@ fn qualified_name(resolve: &Resolve, ty: &Type) -> String {
     }
 }
 
-/// Renders a type the way it would be written in WIT.
-fn type_name(resolve: &Resolve, ty: &Type) -> String {
+fn wit_type_name(resolve: &Resolve, ty: &Type) -> String {
+    //return primitive type immediatly if known, if Type::Id(id) is found it is not a primitive type
     let id = match ty {
         Type::Bool => return "bool".into(),
         Type::U8 => return "u8".into(),
@@ -395,21 +375,24 @@ fn type_name(resolve: &Resolve, ty: &Type) -> String {
         Type::Id(id) => *id,
     };
 
+    //return named types (typedefs like: type grams = u32; resources, variants, enums, ...)
     let def = &resolve.types[id];
-    if let Some(name) = &def.name {
-        return name.clone();
+    match &def.name {
+        Some(name) => return name.clone(),
+        None => {}
     }
 
-    let opt = |t: &Option<Type>| t.as_ref().map(|t| type_name(resolve, t));
+    //resolve anonymous types (defined inline / return types such as: list, option, ...)
+    let opt = |t: &Option<Type>| t.as_ref().map(|t| wit_type_name(resolve, t));
     match &def.kind {
-        TypeDefKind::Option(t) => format!("option<{}>", type_name(resolve, t)),
-        TypeDefKind::List(t) => format!("list<{}>", type_name(resolve, t)),
-        TypeDefKind::FixedLengthList(t, n) => format!("list<{}, {n}>", type_name(resolve, t)),
+        TypeDefKind::Option(t) => format!("option<{}>", wit_type_name(resolve, t)),
+        TypeDefKind::List(t) => format!("list<{}>", wit_type_name(resolve, t)),
+        TypeDefKind::FixedLengthList(t, n) => format!("list<{}, {n}>", wit_type_name(resolve, t)),
         TypeDefKind::Map(k, v) => {
-            format!("map<{}, {}>", type_name(resolve, k), type_name(resolve, v))
+            format!("map<{}, {}>", wit_type_name(resolve, k), wit_type_name(resolve, v))
         }
         TypeDefKind::Tuple(t) => {
-            let items: Vec<_> = t.types.iter().map(|t| type_name(resolve, t)).collect();
+            let items: Vec<_> = t.types.iter().map(|t| wit_type_name(resolve, t)).collect();
             format!("tuple<{}>", items.join(", "))
         }
         TypeDefKind::Result(r) => match (opt(&r.ok), opt(&r.err)) {
@@ -420,11 +403,11 @@ fn type_name(resolve: &Resolve, ty: &Type) -> String {
         },
         TypeDefKind::Future(t) => opt(t).map_or("future".into(), |t| format!("future<{t}>")),
         TypeDefKind::Stream(t) => opt(t).map_or("stream".into(), |t| format!("stream<{t}>")),
-        TypeDefKind::Handle(Handle::Own(id)) => type_name(resolve, &Type::Id(*id)),
+        TypeDefKind::Handle(Handle::Own(id)) => wit_type_name(resolve, &Type::Id(*id)),
         TypeDefKind::Handle(Handle::Borrow(id)) => {
-            format!("borrow<{}>", type_name(resolve, &Type::Id(*id)))
+            format!("borrow<{}>", wit_type_name(resolve, &Type::Id(*id)))
         }
-        TypeDefKind::Type(t) => type_name(resolve, t),
+        TypeDefKind::Type(t) => wit_type_name(resolve, t),
         // Records, variants, enums, flags and resources always have a name.
         _ => "<unnamed>".into(),
     }
