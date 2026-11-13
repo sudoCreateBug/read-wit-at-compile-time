@@ -50,6 +50,7 @@ pub fn read_wit(input: TokenStream) -> TokenStream {
     output
 }
 
+//lifetime needed because it stores a reference
 struct Printer<'a> {
     resolve: &'a Resolve,
     errors: Vec<String>,
@@ -64,6 +65,8 @@ impl Printer<'_> {
             eprintln!("package {}{ann}", package.name);
 
             eprintln!("    interfaces:");
+            //&id auto rerederences the id given by the itterator, the &package.interfaces is to
+            //indicate it being borrowed (no ownership transfer)
             for (name, &id) in &package.interfaces {
                 let ann = format_annotations(&self.interface_annotations(id));
                 eprintln!("        {name}{ann}");
@@ -71,8 +74,8 @@ impl Printer<'_> {
             }
 
             eprintln!("    worlds:");
-            for &world_id in package.worlds.values() {
-                self.print_world(world_id);
+            for (_, world_id) in &package.worlds {
+                self.print_world(*world_id);
             }
         }
     }
